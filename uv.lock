@@ -324,7 +324,7 @@ wheels = [
 [[package]]
 name = "gel"
 version = "3.1.0"
-source = { git = "https://github.com/geldata/gel-python.git#38250d502739828f7c9852f8271aa95a6eac3c86" }
+source = { git = "https://github.com/geldata/gel-python.git#1ee0e72cdac677c4194e18a287454d2f58fadccb" }
 dependencies = [
     { name = "certifi", marker = "sys_platform == 'win32'" },
     { name = "pydantic" },
