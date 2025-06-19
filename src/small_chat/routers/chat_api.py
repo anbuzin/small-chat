@@ -11,6 +11,8 @@ import json
 from small_chat.agents.talker import get_talker_agent, TalkerContext
 from small_chat.common.types import CommonChat, CommonMessage
 from small_chat.db import get_gel
+from models import default, std
+from models.ext import ai
 
 
 router = APIRouter()
@@ -23,75 +25,33 @@ class MessageRequest(BaseModel):
 
 @router.get("/chat/{chat_id}")
 async def get_chat(chat_id: uuid.UUID, gel_client=Depends(get_gel)) -> CommonChat:
-    result = await gel_client.query_single(
-        """
-        with 
-        chat_id := <uuid>$chat_id,
-        chat := (select Chat filter .id = chat_id)
-    select assert_exists(chat) {
-        id,
-        title,
-        archive: {
-            llm_role,
-            body,
-            tool_name,
-            tool_args,
-            created_at,
-            is_evicted
-        } order by .created_at,
-        history: {
-            llm_role,
-            body,
-            tool_name,
-            tool_args,
-            created_at,
-            is_evicted
-        } order by .created_at
-    }
-    """,
-        chat_id=chat_id,
-    )
-    return CommonChat.from_gel_result(result)
+    q = default.Chat.select(
+        '*',
+        archive=lambda c: c.archive.select('*').order_by(created_at=True),
+        history=lambda c: c.history.select('*').order_by(created_at=True)
+    ).filter(lambda c: c.id == chat_id)
+    
+    result = await gel_client.get(q)
+    return CommonChat.from_gel_result(result.__dict__)
 
 
 @router.get("/chats")
 async def get_chats(gel_client=Depends(get_gel)) -> list[CommonChat]:
-    result = await gel_client.query(
-        """
-        select Chat {
-            id,
-            title,
-            history: {
-                llm_role,
-                body,
-                tool_name,
-                tool_args,
-                created_at,
-                is_evicted
-            } order by .created_at,
-            archive: {
-                llm_role,
-                body,
-                tool_name,
-                tool_args,
-                created_at,
-                is_evicted
-            } order by .created_at
-        }
-        order by .created_at desc
-        """
-    )
-    return [CommonChat.from_gel_result(chat) for chat in result]
+    q = default.Chat.select(
+        '*',
+        history=lambda c: c.history.select('*').order_by(created_at=True),
+        archive=lambda c: c.archive.select('*').order_by(created_at=True)
+    ).order_by(created_at='desc')
+    
+    results = await gel_client.query(q)
+    return [CommonChat.from_gel_result(chat.__dict__) for chat in results]
 
 
 @router.post("/chat")
 async def create_chat(gel_client=Depends(get_gel)) -> uuid.UUID:
-    result = await gel_client.query_single(
-        """
-        insert Chat; 
-        """
-    )
-    return result.id
+    chat = default.Chat()
+    await gel_client.save(chat)
+    return chat.id
 
 
 @router.post("/message")
@@ -113,31 +73,14 @@ async def handle_message(
             model="text-embedding-3-small",
         )
 
-        user_facts = await gel_client.query(
-            """
-            with
-                vector_search := ext::ai::search(Fact, <array<float32>>$embedding_vector),
-                facts := (
-                    select vector_search.object
-                    order by vector_search.distance asc
-                    limit 5
-                )
-            select facts.body
-            """,
-            embedding_vector=embedding_vector,
-        )
+        user_facts_q = ai.search(default.Fact, embedding_vector).select(
+            lambda result: result.object.body
+        ).order_by(lambda result: result.distance).limit(5)
+        
+        user_facts = await gel_client.query(user_facts_q)
 
-        # user_facts = await gel_client.query(
-        #     """
-        #     select Fact.body
-        #     """
-        # )
-
-        behavior_prompt = await gel_client.query(
-            """
-            select Prompt.body
-            """
-        )
+        behavior_prompt_q = default.Prompt.select(body=True)
+        behavior_prompt = await gel_client.query(behavior_prompt_q)
 
         yield "*Gathering context...*\n"
 
@@ -148,14 +91,13 @@ async def handle_message(
             message_history=chat.to_pydantic_ai_messages(),
             deps=TalkerContext(
                 gel_client=gel_client,
-                user_facts=user_facts,
-                behavior_prompt=behavior_prompt,
+                user_facts=[fact.body for fact in user_facts],
+                behavior_prompt=[prompt.body for prompt in behavior_prompt],
             ),
         ) as result:
             async for text in result.stream_text(delta=True):
                 full_response += text
                 yield text
-
 
         new_messages = []
         for message in result.new_messages():
@@ -163,32 +105,24 @@ async def handle_message(
                 common_message = CommonMessage.from_pydantic_ai_message_part(part)
                 new_messages.append(common_message.model_dump())
 
-        await gel_client.query(
-            """
-            with
-                messages_json := <json>$messages_json,
-                chat := assert_exists(
-                    (select Chat filter .id = <uuid>$chat_id)
-                ),
-                new_messages := (
-                    for raw_message in json_array_unpack(messages_json) 
-                    union (
-                        insert Message {
-                            llm_role := <str>raw_message['role'],
-                            body := <optional str>raw_message['content'],
-                            tool_name := <optional str>raw_message['tool_name'],
-                            tool_args := to_json(<optional str>raw_message['tool_args']),
-                        }
-                    )
-                )
-            update chat
-            set {
-                archive := distinct (.archive union new_messages)
-            }
-            """,
-            chat_id=request.chat_id,
-            messages_json=json.dumps(new_messages, default=str),
-        )
+        # Create Message objects using ORM
+        chat_obj = await gel_client.get(default.Chat.filter(lambda c: c.id == request.chat_id))
+        
+        message_objects = []
+        for msg_data in new_messages:
+            message = default.Message(
+                llm_role=msg_data['role'],
+                body=msg_data.get('content'),
+                tool_name=msg_data.get('tool_name'),
+                tool_args=json.dumps(msg_data.get('tool_args')) if msg_data.get('tool_args') else None,
+            )
+            message_objects.append(message)
+        
+        await gel_client.save(*message_objects)
+        
+        # Update chat archive with new messages
+        chat_obj.archive.extend(message_objects)
+        await gel_client.save(chat_obj)
 
     return StreamingResponse(
         stream_response(),
