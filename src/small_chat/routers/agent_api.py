@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 import httpx
 import os
+import gel
 
 from small_chat.db import get_gel
 from small_chat.agents.summarizer import get_summarizer_agent
@@ -67,7 +68,11 @@ async def extract(
         history=lambda c: c.history.select('*').order_by(created_at=True)
     ).filter(lambda c: c.id == request.chat_id)
     
-    result = await gel_client.get(q)
+    try:
+        result = await gel_client.get(q)
+    except gel.errors.NoDataError:
+        raise HTTPException(status_code=404, detail=f"Chat not found: {request.chat_id}")
+
     chat = CommonChat.from_gel_result(result.__dict__)
 
     formatted_messages = "\n\n".join([f"{m.role}: {m.content}" for m in chat.history])
@@ -108,9 +113,11 @@ async def get_title(
 
     title = response.output
 
-    # Use ORM to update the chat
-    chat = await gel_client.get(default.Chat.filter(lambda c: c.id == request.chat_id))
-    chat.title = title
-    await gel_client.save(chat)
+    try:
+        chat = await gel_client.get(default.Chat.filter(lambda c: c.id == request.chat_id))
+        chat.title = title
+        await gel_client.save(chat)
+    except gel.errors.NoDataError:
+        raise HTTPException(status_code=404, detail=f"Chat not found: {request.chat_id}")
 
     return {"title": title}

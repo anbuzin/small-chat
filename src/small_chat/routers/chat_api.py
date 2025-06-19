@@ -1,8 +1,9 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from pydantic_ai import Agent
 from gel import AsyncIOClient
+import gel
 import gel.ai
 
 import uuid
@@ -26,23 +27,27 @@ class MessageRequest(BaseModel):
 @router.get("/chat/{chat_id}")
 async def get_chat(chat_id: uuid.UUID, gel_client=Depends(get_gel)) -> CommonChat:
     q = default.Chat.select(
-        '*',
-        archive=lambda c: c.archive.select('*').order_by(created_at=True),
-        history=lambda c: c.history.select('*').order_by(created_at=True)
+        "*",
+        archive=lambda c: c.archive.select("*").order_by(created_at=True),
+        history=lambda c: c.history.select("*").order_by(created_at=True),
     ).filter(lambda c: c.id == chat_id)
-    
-    result = await gel_client.get(q)
+
+    try:
+        result = await gel_client.get(q)
+    except gel.errors.NoDataError:
+        raise HTTPException(status_code=404, detail=f"Chat not found: {chat_id}")
+
     return CommonChat.from_gel_result(result.__dict__)
 
 
 @router.get("/chats")
 async def get_chats(gel_client=Depends(get_gel)) -> list[CommonChat]:
     q = default.Chat.select(
-        '*',
-        history=lambda c: c.history.select('*').order_by(created_at=True),
-        archive=lambda c: c.archive.select('*').order_by(created_at=True)
-    ).order_by(created_at='desc')
-    
+        "*",
+        history=lambda c: c.history.select("*").order_by(created_at=True),
+        archive=lambda c: c.archive.select("*").order_by(created_at=True),
+    ).order_by(created_at="desc")
+
     results = await gel_client.query(q)
     return [CommonChat.from_gel_result(chat.__dict__) for chat in results]
 
@@ -73,10 +78,13 @@ async def handle_message(
             model="text-embedding-3-small",
         )
 
-        user_facts_q = ai.search(default.Fact, embedding_vector).select(
-            lambda result: result.object.body
-        ).order_by(lambda result: result.distance).limit(5)
-        
+        user_facts_q = (
+            ai.search(default.Fact, embedding_vector)
+            .select(lambda result: result.object.body)
+            .order_by(lambda result: result.distance)
+            .limit(5)
+        )
+
         user_facts = await gel_client.query(user_facts_q)
 
         behavior_prompt_q = default.Prompt.select(body=True)
@@ -106,20 +114,29 @@ async def handle_message(
                 new_messages.append(common_message.model_dump())
 
         # Create Message objects using ORM
-        chat_obj = await gel_client.get(default.Chat.filter(lambda c: c.id == request.chat_id))
-        
+        try:
+            chat_obj = await gel_client.get(
+                default.Chat.filter(lambda c: c.id == request.chat_id)
+            )
+        except gel.errors.NoDataError:
+            raise HTTPException(
+                status_code=404, detail=f"Chat not found: {request.chat_id}"
+            )
+
         message_objects = []
         for msg_data in new_messages:
             message = default.Message(
-                llm_role=msg_data['role'],
-                body=msg_data.get('content'),
-                tool_name=msg_data.get('tool_name'),
-                tool_args=json.dumps(msg_data.get('tool_args')) if msg_data.get('tool_args') else None,
+                llm_role=msg_data["role"],
+                body=msg_data.get("content"),
+                tool_name=msg_data.get("tool_name"),
+                tool_args=json.dumps(msg_data.get("tool_args"))
+                if msg_data.get("tool_args")
+                else None,
             )
             message_objects.append(message)
-        
+
         await gel_client.save(*message_objects)
-        
+
         # Update chat archive with new messages
         chat_obj.archive.extend(message_objects)
         await gel_client.save(chat_obj)
