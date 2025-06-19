@@ -64,9 +64,9 @@ async def extract(
 ):
     q = default.Chat.select(
         '*',
-        archive=lambda c: c.archive.select('*').order_by(created_at=True),
-        history=lambda c: c.history.select('*').order_by(created_at=True)
-    ).filter(lambda c: c.id == request.chat_id)
+        archive=lambda c: c.archive.order_by(created_at="asc"),
+        history=lambda c: c.history.order_by(created_at="asc")
+    ).filter(id=request.chat_id)
     
     try:
         result = await gel_client.get(q)
@@ -114,7 +114,7 @@ async def get_title(
     title = response.output
 
     try:
-        chat = await gel_client.get(default.Chat.filter(lambda c: c.id == request.chat_id))
+        chat = await gel_client.get(default.Chat.filter(id=request.chat_id))
         chat.title = title
         await gel_client.save(chat)
     except gel.errors.NoDataError:
