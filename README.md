@@ -1,2 +1,1 @@
-# agent-mem
-Agent memory demo with Gel
+# small chat

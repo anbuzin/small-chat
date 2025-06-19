@@ -2,11 +2,13 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 import httpx
 import os
+import gel
 
-from agent_mem.db import get_gel
-from agent_mem.agents.summarizer import get_summarizer_agent
-from agent_mem.agents.extractor import get_extractor_agent, ExtractorContext
-from agent_mem.common.types import CommonChat
+from small_chat.db import get_gel
+from small_chat.agents.summarizer import get_summarizer_agent
+from small_chat.agents.extractor import get_extractor_agent, ExtractorContext
+from small_chat.common.types import CommonChat
+from models import default, std
 
 
 router = APIRouter()
@@ -37,19 +39,14 @@ async def summarize(
 
     summary = response.output
 
-    await gel_client.query(
-        """
-        select insert_summary(
-            <uuid>$chat_id,
-            <datetime><str>$cutoff,
-            <str>$summary,
-            <datetime><str>$summary_datetime
+    # Use the insert_summary function from the schema
+    result = await gel_client.query(
+        default.insert_summary(
+            chat_id=request.chat_id,
+            cutoff=request.cutoff,
+            summary=summary,
+            summary_datetime=request.summary_datetime,
         )
-        """,
-        chat_id=request.chat_id,
-        cutoff=request.cutoff,
-        summary=summary,
-        summary_datetime=request.summary_datetime,
     )
 
     return {"summary": summary}
@@ -65,35 +62,18 @@ async def extract(
     gel_client=Depends(get_gel),
     extractor_agent=Depends(get_extractor_agent),
 ):
-    result = await gel_client.query_single(
-        """
-        with 
-            chat_id := <uuid>$chat_id,
-            chat := (select Chat filter .id = chat_id)
-        select assert_exists(chat) {
-            id,
-            title,
-            archive: {
-                llm_role,
-                body,
-                tool_name,
-                tool_args,
-                created_at,
-                is_evicted
-            } order by .created_at,
-            history: {
-                llm_role,
-                body,
-                tool_name,
-                tool_args,
-                created_at,
-                is_evicted
-            } order by .created_at
-        }
-        """,
-        chat_id=request.chat_id,
-    )
-    chat = CommonChat.from_gel_result(result)
+    q = default.Chat.select(
+        '*',
+        archive=lambda c: c.archive.order_by(created_at="asc"),
+        history=lambda c: c.history.order_by(created_at="asc")
+    ).filter(id=request.chat_id)
+    
+    try:
+        result = await gel_client.get(q)
+    except gel.errors.NoDataError:
+        raise HTTPException(status_code=404, detail=f"Chat not found: {request.chat_id}")
+
+    chat = CommonChat.from_gel_result(result.__dict__)
 
     formatted_messages = "\n\n".join([f"{m.role}: {m.content}" for m in chat.history])
 
@@ -133,16 +113,11 @@ async def get_title(
 
     title = response.output
 
-    await gel_client.query(
-        """
-        update Chat
-        filter .id = <uuid>$chat_id
-        set {
-            title := <str>$title
-        }
-        """,
-        chat_id=request.chat_id,
-        title=title,
-    )
+    try:
+        chat = await gel_client.get(default.Chat.filter(id=request.chat_id))
+        chat.title = title
+        await gel_client.save(chat)
+    except gel.errors.NoDataError:
+        raise HTTPException(status_code=404, detail=f"Chat not found: {request.chat_id}")
 
     return {"title": title}
