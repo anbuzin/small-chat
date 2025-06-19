@@ -70,16 +70,8 @@ async def handle_message(
     async def stream_response():
         yield "*Fetching facts...*\n"
 
-        gel_ai_client = await gel.ai.create_async_rag_client(
-            gel_client, model="gpt-4o-mini"
-        )
-        embedding_vector = await gel_ai_client.generate_embeddings(
-            request.message.content,
-            model="text-embedding-3-small",
-        )
-
         user_facts_q = (
-            ai.search(default.Fact, embedding_vector)
+            ai.search(default.Fact, std.str(request.message.content))
             .select(lambda result: result.object.body)
             .order_by(lambda result: result.distance)
             .limit(5)
