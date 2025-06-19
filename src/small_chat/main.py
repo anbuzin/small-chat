@@ -4,7 +4,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from agent_mem.routers import chat_api, agent_api
+from small_chat.routers import chat_api, agent_api
 
 
 app = FastAPI()

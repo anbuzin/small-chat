@@ -8,9 +8,9 @@ import gel.ai
 import uuid
 import json
 
-from agent_mem.agents.talker import get_talker_agent, TalkerContext
-from agent_mem.common.types import CommonChat, CommonMessage
-from agent_mem.db import get_gel
+from small_chat.agents.talker import get_talker_agent, TalkerContext
+from small_chat.common.types import CommonChat, CommonMessage
+from small_chat.db import get_gel
 
 
 router = APIRouter()

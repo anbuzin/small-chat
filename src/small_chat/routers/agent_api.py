@@ -3,10 +3,10 @@ from pydantic import BaseModel
 import httpx
 import os
 
-from agent_mem.db import get_gel
-from agent_mem.agents.summarizer import get_summarizer_agent
-from agent_mem.agents.extractor import get_extractor_agent, ExtractorContext
-from agent_mem.common.types import CommonChat
+from small_chat.db import get_gel
+from small_chat.agents.summarizer import get_summarizer_agent
+from small_chat.agents.extractor import get_extractor_agent, ExtractorContext
+from small_chat.common.types import CommonChat
 
 
 router = APIRouter()
