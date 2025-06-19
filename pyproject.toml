@@ -1,10 +1,10 @@
 [project]
-name = "agent-mem"
+name = "small-chat"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
 authors = [
-    { name = "deepbuzin", email = "contactbuzin@gmail.com" }
+    { name = "anbuzin", email = "contactbuzin@gmail.com" }
 ]
 requires-python = ">=3.13"
 dependencies = [
@@ -17,7 +17,7 @@ dependencies = [
 ]
 
 [project.scripts]
-agent-mem = "agent_mem:main"
+small-chat = "small_chat:main"
 
 [build-system]
 requires = ["hatchling"]
